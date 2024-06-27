@@ -59,7 +59,7 @@ To evaluate or train the S5-ViT model, you will need to download the required pr
 </tr>
 </tbody></table>
 
-You may also pre-process the dataset yourself by following the [instructions](https://github.com/NikolaZubic/ssms_event_cameras/blob/master/RVT/scripts/genx/README.md).
+You may also pre-process the dataset yourself by following the [instructions](RVT/scripts/genx/README.md).
 
 ## Pre-trained Checkpoints
 ### 1 Mpx
