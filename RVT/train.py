@@ -109,7 +109,7 @@ def main(config: DictConfig):
         ckpt_path = None
 
     # Load pretrained checkpoint
-    checkpoint_path = 'pretrained/gen1_base.ckpt'
+    checkpoint_path = '/root/code/pretrained/gen1_base.ckpt'
     module = Module.load_from_checkpoint(checkpoint_path, **{"full_config": config}, strict=False)
     # Freeze YOLOPAFPN, YOLOXHead
     for name, param in module.named_parameters():
