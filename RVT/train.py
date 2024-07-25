@@ -174,7 +174,7 @@ def main(config: DictConfig):
         benchmark=config.reproduce.benchmark,
         deterministic=config.reproduce.deterministic_flag,
     )
-    with open('/root/code/model.txt', "w") as f:
+    with open('model.txt', "w") as f:
         # Save model structure
         f.write(str(module))
         # Save # of model parameters
