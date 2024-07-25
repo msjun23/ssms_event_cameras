@@ -31,7 +31,7 @@ from modules.utils.fetch import fetch_data_module, fetch_model_module
 from modules.detection import Module
 
 
-@hydra.main(config_path="config", config_name="train", version_base="1.2")
+@hydra.main(config_path="config", config_name="train", version_base="1.1")
 def main(config: DictConfig):
     dynamically_modify_train_config(config)
     # Just to check whether config can be resolved
@@ -109,7 +109,7 @@ def main(config: DictConfig):
         ckpt_path = None
 
     # Load pretrained checkpoint
-    checkpoint_path = 'pretrained/gen1_base.ckpt'
+    checkpoint_path = '/root/code/pretrained/gen1_base.ckpt'
     module = Module.load_from_checkpoint(checkpoint_path, **{"full_config": config}, strict=False)
     # Freeze YOLOPAFPN, YOLOXHead
     for name, param in module.named_parameters():
@@ -174,7 +174,7 @@ def main(config: DictConfig):
         benchmark=config.reproduce.benchmark,
         deterministic=config.reproduce.deterministic_flag,
     )
-    with open('/root/code/model.txt', "w") as f:
+    with open('model.txt', "w") as f:
         # Save model structure
         f.write(str(module))
         # Save # of model parameters
