@@ -198,9 +198,17 @@ class RNNDetectorStage(nn.Module):
         # ]
         # self.att_blocks = nn.ModuleList(blocks)
 
-        self.pix_s5_block = S5Block(
-            dim=stage_dim, state_dim=stage_dim, bidir=False, bandlimit=0.5
-        )
+        # self.pix_s5_block = S5Block(
+        #     dim=stage_dim, state_dim=stage_dim, bidir=False, bandlimit=0.5
+        # )
+        blocks = [
+            S5Block(dim=stage_dim, 
+                    state_dim=stage_dim, 
+                    bidir=False, 
+                    bandlimit=0.5)
+            for i in range(num_blocks)
+        ]
+        self.pix_s5_blocks = nn.ModuleList(blocks)
 
         self.s5_block = S5Block(
             dim=stage_dim, state_dim=stage_dim, bidir=False, bandlimit=0.5
@@ -246,19 +254,20 @@ class RNNDetectorStage(nn.Module):
 
         x = rearrange(x, 'B H W C -> B (H W) C')    # B' C H W -> B' HW C
         
-        if pix_states is None:
-            pix_states = self.pix_s5_block.s5.initial_state(
-                batch_size=batch_size * sequence_length
-            ).to(x.device)
-        else:
-            pix_states = rearrange(pix_states, "B C L -> (B L) C")
+        for pix_s5_block in self.pix_s5_blocks:
+            if pix_states is None:
+                pix_states = pix_s5_block.s5.initial_state(
+                    batch_size=batch_size * sequence_length
+                ).to(x.device)
+            else:
+                pix_states = rearrange(pix_states, "B C L -> (B L) C")
+                
+            x, pix_states = pix_s5_block(x, pix_states)    # LB HW C
             
-        x, pix_states = self.pix_s5_block(x, pix_states)    # LB HW C
-        
-        x = rearrange(x, '(L B) (H W) C -> (B H W) L C', 
-                      L=sequence_length, B=batch_size, H=new_h, W=new_w)    # LB HW C -> BHW L C
-        
-        pix_states = rearrange(pix_states, "(B L) C -> B C L", L=sequence_length)
+            x = rearrange(x, '(L B) (H W) C -> (B H W) L C', 
+                        L=sequence_length, B=batch_size, H=new_h, W=new_w)    # LB HW C -> BHW L C
+            
+            pix_states = rearrange(pix_states, "(B L) C -> B C L", L=sequence_length)
 
         # if token_mask is not None:
         #     assert self.mask_token is not None, "No mask token present in this stage"
