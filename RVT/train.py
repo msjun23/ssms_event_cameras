@@ -31,7 +31,7 @@ from modules.utils.fetch import fetch_data_module, fetch_model_module
 from modules.detection import Module
 
 
-@hydra.main(config_path="config", config_name="train", version_base="1.2")
+@hydra.main(config_path="config", config_name="train", version_base="1.1")
 def main(config: DictConfig):
     dynamically_modify_train_config(config)
     # Just to check whether config can be resolved
