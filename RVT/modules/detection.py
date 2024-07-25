@@ -39,6 +39,11 @@ class Module(pl.LightningModule):
 
         self.mdl = YoloXDetector(self.mdl_config)
 
+        self.pix_mode_2_rnn_states: Dict[Mode, RNNStates] = {
+            Mode.TRAIN: RNNStates(),
+            Mode.VAL: RNNStates(),
+            Mode.TEST: RNNStates(),
+        }
         self.mode_2_rnn_states: Dict[Mode, RNNStates] = {
             Mode.TRAIN: RNNStates(),
             Mode.VAL: RNNStates(),
@@ -135,6 +140,9 @@ class Module(pl.LightningModule):
         is_first_sample = data[DataType.IS_FIRST_SAMPLE]
         token_mask_sequence = data.get(DataType.TOKEN_MASK, None)
 
+        self.pix_mode_2_rnn_states[mode].reset(
+            worker_id=worker_id, indices_or_bool_tensor=is_first_sample
+        )
         self.mode_2_rnn_states[mode].reset(
             worker_id=worker_id, indices_or_bool_tensor=is_first_sample
         )
@@ -147,6 +155,7 @@ class Module(pl.LightningModule):
         else:
             assert self.mode_2_batch_size[mode] == batch_size
 
+        pix_prev_states = self.pix_mode_2_rnn_states[mode].get_states(worker_id=worker_id)
         prev_states = self.mode_2_rnn_states[mode].get_states(worker_id=worker_id)
         backbone_feature_selector = BackboneFeatureSelector()
         ev_repr_selector = EventReprSelector()
@@ -171,12 +180,14 @@ class Module(pl.LightningModule):
         else:
             assert self.mode_2_hw[mode] == ev_tensor_sequence.shape[-2:]
 
-        backbone_features, states = self.mdl.forward_backbone(
+        backbone_features, pix_states, states = self.mdl.forward_backbone(
             x=ev_tensor_sequence,
+            pix_previous_states=pix_prev_states,
             previous_states=prev_states,
             token_mask=token_mask_sequence,
             train_step=True,
         )
+        pix_prev_states = pix_states
         prev_states = states
 
         for tidx, curr_labels in enumerate(sparse_obj_labels):
@@ -198,6 +209,9 @@ class Module(pl.LightningModule):
                     selected_indices=valid_batch_indices,
                 )
 
+        self.pix_mode_2_rnn_states[mode].save_states_and_detach(
+            worker_id=worker_id, states=pix_prev_states
+        )
         self.mode_2_rnn_states[mode].save_states_and_detach(
             worker_id=worker_id, states=prev_states
         )
@@ -278,6 +292,9 @@ class Module(pl.LightningModule):
         sparse_obj_labels = data[DataType.OBJLABELS_SEQ]
         is_first_sample = data[DataType.IS_FIRST_SAMPLE]
 
+        self.pix_mode_2_rnn_states[mode].reset(
+            worker_id=worker_id, indices_or_bool_tensor=is_first_sample
+        )
         self.mode_2_rnn_states[mode].reset(
             worker_id=worker_id, indices_or_bool_tensor=is_first_sample
         )
@@ -290,6 +307,7 @@ class Module(pl.LightningModule):
         else:
             assert self.mode_2_batch_size[mode] == batch_size
 
+        pix_prev_states = self.pix_mode_2_rnn_states[mode].get_states(worker_id=worker_id)
         prev_states = self.mode_2_rnn_states[mode].get_states(worker_id=worker_id)
         backbone_feature_selector = BackboneFeatureSelector()
         ev_repr_selector = EventReprSelector()
@@ -306,12 +324,14 @@ class Module(pl.LightningModule):
         else:
             assert self.mode_2_hw[mode] == ev_tensor_sequence.shape[-2:]
 
-        backbone_features, states = self.mdl.forward_backbone(
+        backbone_features, pix_states, states = self.mdl.forward_backbone(
             x=ev_tensor_sequence,
+            pix_previous_states=pix_prev_states,
             previous_states=prev_states,
             train_step=False,
         )
 
+        pix_prev_states = pix_states
         prev_states = states
 
         for tidx in range(sequence_len):
@@ -337,6 +357,9 @@ class Module(pl.LightningModule):
                         event_representations=ev_tensor_sequence[tidx],
                         selected_indices=valid_batch_indices,
                     )
+        self.pix_mode_2_rnn_states[mode].save_states_and_detach(
+            worker_id=worker_id, states=pix_prev_states
+        )
         self.mode_2_rnn_states[mode].save_states_and_detach(
             worker_id=worker_id, states=prev_states
         )

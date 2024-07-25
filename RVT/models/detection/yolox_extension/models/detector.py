@@ -35,15 +35,20 @@ class YoloXDetector(th.nn.Module):
     def forward_backbone(
         self,
         x: th.Tensor,
+        pix_previous_states: Optional[LstmStates] = None,
         previous_states: Optional[LstmStates] = None,
         token_mask: Optional[th.Tensor] = None,
         train_step: bool = True,
     ) -> Tuple[BackboneFeatures, LstmStates]:
         with CudaTimer(device=x.device, timer_name="Backbone"):
-            backbone_features, states = self.backbone(
-                x, previous_states, token_mask, train_step
+            # backbone_features, states = self.backbone(
+            #     x, previous_states, token_mask, train_step
+            # )
+            backbone_features, pix_states, states = self.backbone(
+                x, pix_previous_states, previous_states, token_mask, train_step
             )
-        return backbone_features, states
+        # return backbone_features, states
+        return backbone_features, pix_states, states
 
     def forward_detect(
         self, backbone_features: BackboneFeatures, targets: Optional[th.Tensor] = None
@@ -64,11 +69,12 @@ class YoloXDetector(th.nn.Module):
     def forward(
         self,
         x: th.Tensor,
+        pix_previous_states: Optional[LstmStates] = None,
         previous_states: Optional[LstmStates] = None,
         retrieve_detections: bool = True,
         targets: Optional[th.Tensor] = None,
     ) -> Tuple[Union[th.Tensor, None], Union[Dict[str, th.Tensor], None], LstmStates]:
-        backbone_features, states = self.forward_backbone(x, previous_states)
+        backbone_features, pix_states, states = self.forward_backbone(x, pix_previous_states, previous_states)
         outputs, losses = None, None
         if not retrieve_detections:
             assert targets is None
@@ -76,4 +82,4 @@ class YoloXDetector(th.nn.Module):
         outputs, losses = self.forward_detect(
             backbone_features=backbone_features, targets=targets
         )
-        return outputs, losses, states
+        return outputs, losses, pix_states, states

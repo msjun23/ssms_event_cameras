@@ -104,26 +104,40 @@ class RNNDetector(BaseDetector):
     def forward(
         self,
         x: th.Tensor,
+        pix_prev_states: Optional[LstmStates] = None,
         prev_states: Optional[LstmStates] = None,
         token_mask: Optional[th.Tensor] = None,
         train_step: bool = True,
     ) -> Tuple[BackboneFeatures, LstmStates]:
+        if pix_prev_states is None:
+            pix_prev_states = [None] * self.num_stages
+        assert len(pix_prev_states) == self.num_stages
+        pix_states: LstmStates = list()
         if prev_states is None:
             prev_states = [None] * self.num_stages
         assert len(prev_states) == self.num_stages
         states: LstmStates = list()
         output: Dict[int, FeatureMap] = {}
         for stage_idx, stage in enumerate(self.stages):
-            x, state = stage(
+            # x, state = stage(
+            #     x,
+            #     prev_states[stage_idx],
+            #     token_mask if stage_idx == 0 else None,
+            #     train_step,
+            # )
+            x, pix_state, state = stage(
                 x,
+                pix_prev_states[stage_idx],
                 prev_states[stage_idx],
                 token_mask if stage_idx == 0 else None,
                 train_step,
             )
+            pix_states.append(pix_state)
             states.append(state)
             stage_number = stage_idx + 1
             output[stage_number] = x
-        return output, states
+        # return output, states
+        return output, pix_states, states
 
 
 class MaxVitAttentionPairCl(nn.Module):
@@ -174,15 +188,19 @@ class RNNDetectorStage(nn.Module):
             downsample_factor=spatial_downsample_factor,
             downsample_cfg=downsample_cfg,
         )
-        blocks = [
-            MaxVitAttentionPairCl(
-                dim=stage_dim,
-                skip_first_norm=i == 0 and self.downsample_cf2cl.output_is_normed(),
-                attention_cfg=attention_cfg,
-            )
-            for i in range(num_blocks)
-        ]
-        self.att_blocks = nn.ModuleList(blocks)
+        # blocks = [
+        #     MaxVitAttentionPairCl(
+        #         dim=stage_dim,
+        #         skip_first_norm=i == 0 and self.downsample_cf2cl.output_is_normed(),
+        #         attention_cfg=attention_cfg,
+        #     )
+        #     for i in range(num_blocks)
+        # ]
+        # self.att_blocks = nn.ModuleList(blocks)
+
+        self.pix_s5_block = S5Block(
+            dim=stage_dim, state_dim=stage_dim, bidir=False, bandlimit=0.5
+        )
 
         self.s5_block = S5Block(
             dim=stage_dim, state_dim=stage_dim, bidir=False, bandlimit=0.5
@@ -212,6 +230,7 @@ class RNNDetectorStage(nn.Module):
     def forward(
         self,
         x: th.Tensor,
+        pix_states: Optional[LstmState] = None,
         states: Optional[LstmState] = None,
         token_mask: Optional[th.Tensor] = None,
         train_step: bool = True,
@@ -223,17 +242,35 @@ class RNNDetectorStage(nn.Module):
         )  # where B' = (L B) is the new batch size
         x = self.downsample_cf2cl(x)  # B' C H W -> B' H W C
 
-        if token_mask is not None:
-            assert self.mask_token is not None, "No mask token present in this stage"
-            x[token_mask] = self.mask_token
+        new_h, new_w = x.shape[1], x.shape[2]
 
-        for blk in self.att_blocks:
-            x = blk(x)
-        x = nhwC_2_nChw(x)  # B' H W C -> B' C H W
+        x = rearrange(x, 'B H W C -> B (H W) C')    # B' C H W -> B' HW C
+        
+        if pix_states is None:
+            pix_states = self.pix_s5_block.s5.initial_state(
+                batch_size=batch_size * sequence_length
+            ).to(x.device)
+        else:
+            pix_states = rearrange(pix_states, "B C L -> (B L) C")
+            
+        x, pix_states = self.pix_s5_block(x, pix_states)    # LB HW C
+        
+        x = rearrange(x, '(L B) (H W) C -> (B H W) L C', 
+                      L=sequence_length, B=batch_size, H=new_h, W=new_w)    # LB HW C -> BHW L C
+        
+        pix_states = rearrange(pix_states, "(B L) C -> B C L", L=sequence_length)
 
-        new_h, new_w = x.shape[2], x.shape[3]
+        # if token_mask is not None:
+        #     assert self.mask_token is not None, "No mask token present in this stage"
+        #     x[token_mask] = self.mask_token
 
-        x = rearrange(x, "(L B) C H W -> (B H W) L C", L=sequence_length)
+        # for blk in self.att_blocks:
+        #     x = blk(x)
+        # x = nhwC_2_nChw(x)  # B' H W C -> B' C H W
+
+        # new_h, new_w = x.shape[2], x.shape[3]
+
+        # x = rearrange(x, "(L B) C H W -> (B H W) L C", L=sequence_length)
 
         if states is None:
             states = self.s5_block.s5.initial_state(
@@ -250,4 +287,5 @@ class RNNDetectorStage(nn.Module):
 
         states = rearrange(states, "(B H W) C -> B C H W", H=new_h, W=new_w)
 
-        return x, states
+        # return x, states
+        return x, pix_states, states
