@@ -4,6 +4,9 @@ import torch.nn as nn
 from omegaconf import DictConfig, OmegaConf
 from einops import rearrange
 
+from spikingjelly.activation_based import functional
+from .snn import SpkEnc
+
 try:
     from torch import compile as th_compile
 except ImportError:
@@ -182,6 +185,8 @@ class RNNDetectorStage(nn.Module):
         lstm_cfg = stage_cfg.lstm
         attention_cfg = stage_cfg.attention
 
+        self.spk_enc = SpkEnc(in_channels=dim_in, out_channels=dim_in)
+
         self.downsample_cf2cl = get_downsample_layer_Cf2Cl(
             dim_in=dim_in,
             dim_out=stage_dim,
@@ -243,6 +248,13 @@ class RNNDetectorStage(nn.Module):
         token_mask: Optional[th.Tensor] = None,
         train_step: bool = True,
     ) -> Tuple[FeatureMap, LstmState]:
+        # x: [L, B, C, H, W]
+        # Mask out event stream using SpkEnc
+        functional.reset_net(self.spk_enc)
+        spiking_mask = self.spk_enc(x)
+        assert x.shape == spiking_mask.shape    # [L, B, C, H, W]
+        x = spiking_mask * x
+        
         sequence_length = x.shape[0]
         batch_size = x.shape[1]
         x = rearrange(
@@ -260,14 +272,15 @@ class RNNDetectorStage(nn.Module):
                     batch_size=batch_size * sequence_length
                 ).to(x.device)
             else:
-                pix_states = rearrange(pix_states, "B C L -> (B L) C")
+                pass
+                # pix_states = rearrange(pix_states, "B C L -> (B L) C")
                 
             x, pix_states = pix_s5_block(x, pix_states)    # LB HW C
             
-            x = rearrange(x, '(L B) (H W) C -> (B H W) L C', 
-                        L=sequence_length, B=batch_size, H=new_h, W=new_w)    # LB HW C -> BHW L C
-            
-            pix_states = rearrange(pix_states, "(B L) C -> B C L", L=sequence_length)
+        x = rearrange(x, '(L B) (H W) C -> (B H W) L C', 
+                    L=sequence_length, B=batch_size, H=new_h, W=new_w)    # LB HW C -> BHW L C
+        
+        pix_states = rearrange(pix_states, "(B L) C -> B C L", L=sequence_length)
 
         # if token_mask is not None:
         #     assert self.mask_token is not None, "No mask token present in this stage"
