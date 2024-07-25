@@ -108,6 +108,17 @@ def main(config: DictConfig):
 
         ckpt_path = None
 
+    # Load pretrained checkpoint
+    checkpoint_path = 'pretrained/gen1_base.ckpt'
+    module = Module.load_from_checkpoint(checkpoint_path, **{"full_config": config}, strict=False)
+    # Freeze YOLOPAFPN, YOLOXHead
+    for name, param in module.named_parameters():
+        if 'fpn' in name or 'yolox_head' in name:
+            param.requires_grad = False
+    # Print trainable and non-trainable parameters
+    for name, param in module.named_parameters():
+        print(f"Layer: {name} | Trainable: {param.requires_grad}")
+
     # ---------------------
     # Callbacks and Misc
     # ---------------------
@@ -163,6 +174,11 @@ def main(config: DictConfig):
         benchmark=config.reproduce.benchmark,
         deterministic=config.reproduce.deterministic_flag,
     )
+    with open('/root/code/model.txt', "w") as f:
+        # Save model structure
+        f.write(str(module))
+        # Save # of model parameters
+        f.write('\n\n' + ('Total number of parameters: %d' % sum([m.numel() for m in module.parameters()])))
     trainer.fit(model=module, ckpt_path=ckpt_path, datamodule=data_module)
 
 
