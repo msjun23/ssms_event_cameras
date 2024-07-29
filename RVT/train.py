@@ -116,8 +116,8 @@ def main(config: DictConfig):
         if 'fpn' in name or 'yolox_head' in name:
             param.requires_grad = False
     # Print trainable and non-trainable parameters
-    for name, param in module.named_parameters():
-        print(f"Layer: {name} | Trainable: {param.requires_grad}")
+    # for name, param in module.named_parameters():
+    #     print(f"Layer: {name} | Trainable: {param.requires_grad}")
 
     # ---------------------
     # Callbacks and Misc
