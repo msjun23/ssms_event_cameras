@@ -23,6 +23,9 @@ from models.layers.maxvit.maxvit import (
 
 from .base import BaseDetector
 
+import torch.nn.functional as F
+from spikingjelly.activation_based import layer     # For [L B C H W] format data
+
 
 class RNNDetector(BaseDetector):
     def __init__(self, mdl_config: DictConfig):
@@ -168,21 +171,30 @@ class RNNDetectorStage(nn.Module):
         lstm_cfg = stage_cfg.lstm
         attention_cfg = stage_cfg.attention
 
+        downsamples = [
+            layer.Conv2d(in_channels=dim_in, out_channels=dim_in, 
+                         kernel_size=2, stride=2, padding=0, 
+                         step_mode='m') # step_mode='m' for 5D tensor
+            for i in range(4)
+        ]
+        self.downsamples = nn.ModuleList(downsamples)
+        self.ssm_conv = S5Block(dim=dim_in, state_dim=stage_dim, bidir=False)
+
         self.downsample_cf2cl = get_downsample_layer_Cf2Cl(
             dim_in=dim_in,
             dim_out=stage_dim,
             downsample_factor=spatial_downsample_factor,
             downsample_cfg=downsample_cfg,
         )
-        blocks = [
-            MaxVitAttentionPairCl(
-                dim=stage_dim,
-                skip_first_norm=i == 0 and self.downsample_cf2cl.output_is_normed(),
-                attention_cfg=attention_cfg,
-            )
-            for i in range(num_blocks)
-        ]
-        self.att_blocks = nn.ModuleList(blocks)
+        # blocks = [
+        #     MaxVitAttentionPairCl(
+        #         dim=stage_dim,
+        #         skip_first_norm=i == 0 and self.downsample_cf2cl.output_is_normed(),
+        #         attention_cfg=attention_cfg,
+        #     )
+        #     for i in range(num_blocks)
+        # ]
+        # self.att_blocks = nn.ModuleList(blocks)
 
         self.s5_block = S5Block(
             dim=stage_dim, state_dim=stage_dim, bidir=False, bandlimit=0.5
@@ -218,6 +230,46 @@ class RNNDetectorStage(nn.Module):
     ) -> Tuple[FeatureMap, LstmState]:
         sequence_length = x.shape[0]
         batch_size = x.shape[1]
+        shape_buffer = [x.shape]
+        
+        # Downsampling for SSM convolution
+        # [L B C H W] -> [L B C h w]
+        for dsp in self.downsamples:
+            x = dsp(x)
+            shape_buffer.append(x.shape)
+        
+        # SSM Convolution
+        # for h
+        #   for w
+        #       x_patch = [L B C] <- [L B C 1 1]
+        #       x_patch : [B L C] <- [L B C]
+        #       x_patch = SSM <- x_patch
+        #       x_patch : [L B C] <- [B L C]
+        #       [L B C 1 1] = x_patch
+        patch_state = None
+        ssm_conv_outputs = []
+        for h in range(x.shape[-2]):
+            for w in range(x.shape[-1]):
+                x_patch = x[:, :, :, h, w]  # [L B C]
+                x_patch = rearrange(x_patch, 'L B C -> B L C')  # [B L C]
+
+                if patch_state is None:
+                    patch_state = self.ssm_conv.s5.initial_state(batch_size=x_patch.shape[0]).to(x.device)
+                outptu_patch, patch_state = self.ssm_conv(x_patch, patch_state)  # SSM <- x_patch
+                outptu_patch = rearrange(x_patch, 'B L C -> L B C')
+                ssm_conv_outputs.append(outptu_patch)
+        x = th.stack(ssm_conv_outputs, dim=-1).view(sequence_length, batch_size, x.shape[-3], x.shape[-2], x.shape[-1])
+        del patch_state
+        
+        # Upsampling for original size
+        # [L B C h w] -> [L B C H W]
+        shape_idx = -2
+        for _ in range(len(self.downsamples)):
+            _shape = shape_buffer[shape_idx][2:]
+            x = F.interpolate(x, size=_shape, mode='trilinear', align_corners=True)
+            shape_idx -= 1
+        assert x.shape == shape_buffer[0], f'{x.shape} != {shape_buffer[0]}'
+        
         x = rearrange(
             x, "L B C H W -> (L B) C H W"
         )  # where B' = (L B) is the new batch size
@@ -227,8 +279,8 @@ class RNNDetectorStage(nn.Module):
             assert self.mask_token is not None, "No mask token present in this stage"
             x[token_mask] = self.mask_token
 
-        for blk in self.att_blocks:
-            x = blk(x)
+        # for blk in self.att_blocks:
+        #     x = blk(x)
         x = nhwC_2_nChw(x)  # B' H W C -> B' C H W
 
         new_h, new_w = x.shape[2], x.shape[3]
