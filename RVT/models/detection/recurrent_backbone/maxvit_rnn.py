@@ -272,16 +272,14 @@ class RNNDetectorStage(nn.Module):
                     batch_size=batch_size * sequence_length
                 ).to(x.device)
             else:
-                pass
-                # pix_states = rearrange(pix_states, "B C L -> (B L) C")
+                pix_states = rearrange(pix_states, "B C L -> (B L) C")
                 
             x, pix_states = pix_s5_block(x, pix_states)    # LB HW C
+            pix_states = rearrange(pix_states, "(B L) C -> B C L", L=sequence_length)
             
         x = rearrange(x, '(L B) (H W) C -> (B H W) L C', 
                     L=sequence_length, B=batch_size, H=new_h, W=new_w)    # LB HW C -> BHW L C
         
-        pix_states = rearrange(pix_states, "(B L) C -> B C L", L=sequence_length)
-
         # if token_mask is not None:
         #     assert self.mask_token is not None, "No mask token present in this stage"
         #     x[token_mask] = self.mask_token
