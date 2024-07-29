@@ -109,15 +109,15 @@ def main(config: DictConfig):
         ckpt_path = None
 
     # Load pretrained checkpoint
-    checkpoint_path = '/root/code/pretrained/gen1_base.ckpt'
-    module = Module.load_from_checkpoint(checkpoint_path, **{"full_config": config}, strict=False)
-    # Freeze YOLOPAFPN, YOLOXHead
-    for name, param in module.named_parameters():
-        if 'fpn' in name or 'yolox_head' in name:
-            param.requires_grad = False
+    # checkpoint_path = '/root/code/pretrained/gen1_base.ckpt'
+    # module = Module.load_from_checkpoint(checkpoint_path, **{"full_config": config}, strict=False)
+    # # Freeze YOLOPAFPN, YOLOXHead
+    # for name, param in module.named_parameters():
+    #     if 'fpn' in name or 'yolox_head' in name:
+    #         param.requires_grad = False
     # Print trainable and non-trainable parameters
-    for name, param in module.named_parameters():
-        print(f"Layer: {name} | Trainable: {param.requires_grad}")
+    # for name, param in module.named_parameters():
+    #     print(f"Layer: {name} | Trainable: {param.requires_grad}")
 
     # ---------------------
     # Callbacks and Misc
