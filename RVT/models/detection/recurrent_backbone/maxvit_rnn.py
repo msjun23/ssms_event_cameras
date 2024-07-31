@@ -179,6 +179,7 @@ class RNNDetectorStage(nn.Module):
             for _ in range(stage_cfg.sequence_length)
         ]
         self.event_retrievals = nn.ModuleList(event_retrieval)
+        self.s5_ret = S5Block(dim=stage_dim, state_dim=stage_dim, bidir=False, bandlimit=0.5)
         
         blocks = [
             MaxVitAttentionPairCl(
@@ -251,9 +252,16 @@ class RNNDetectorStage(nn.Module):
             event_gen = th.stack(event_gens, dim=0)     # [L B H W C]
             
             # event_gen -> SSM; state modeling as retrieved event data
+            _height = event_gen.shape[2]
+            _width  = event_gen.shape[3]
+            event_gen = rearrange(event_gen, 'L B H W C -> (B H W) L C')
+            _states = rearrange(states, "B C H W -> (B H W) C")
+            event_gen, _ = self.s5_ret(event_gen, _states)
             
             # Adding input event embedding & event_gen
-            event_gen = rearrange(event_gen, 'L B H W C -> (L B) H W C')
+            event_gen = rearrange(event_gen, '(B H W) L C -> (L B) H W C', 
+                                  B=batch_size, L=sequence_length, 
+                                  H=_height, W=_width)
             assert x.shape == event_gen.shape
             x += event_gen
 
