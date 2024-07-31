@@ -174,6 +174,12 @@ class RNNDetectorStage(nn.Module):
             downsample_factor=spatial_downsample_factor,
             downsample_cfg=downsample_cfg,
         )
+        event_retrieval = [
+            nn.Linear(in_features=stage_dim, out_features=stage_dim)
+            for _ in range(stage_cfg.sequence_length)
+        ]
+        self.event_retrievals = nn.ModuleList(event_retrieval)
+        
         blocks = [
             MaxVitAttentionPairCl(
                 dim=stage_dim,
@@ -218,22 +224,49 @@ class RNNDetectorStage(nn.Module):
     ) -> Tuple[FeatureMap, LstmState]:
         sequence_length = x.shape[0]
         batch_size = x.shape[1]
+        # print('\n===')
+        # print('x input:', x.shape)
         x = rearrange(
             x, "L B C H W -> (L B) C H W"
         )  # where B' = (L B) is the new batch size
         x = self.downsample_cf2cl(x)  # B' C H W -> B' H W C
+        # print('x downsampled:', x.shape)
 
         if token_mask is not None:
             assert self.mask_token is not None, "No mask token present in this stage"
             x[token_mask] = self.mask_token
 
+        if states is not None:
+            # Idea 1. States to event_gen
+            # states: th.complex64 -> th.float32, basically SSM' states are in complex domain
+            # States to real domain
+            states_real = th.fft.ifft(states)
+            states_real = th.view_as_real(states_real)[...,0].type(th.float32)
+            states_real = rearrange(states_real, 'B C H W -> B H W C')
+            
+            # event_gen: event retrieval and stacking, [B H W C] -> [L B H W C]
+            event_gens = []
+            for ev_ret in self.event_retrievals:
+                event_gens.append(ev_ret(states_real))  # List of [B H W C]
+            event_gen = th.stack(event_gens, dim=0)     # [L B H W C]
+            
+            # event_gen -> SSM; state modeling as retrieved event data
+            
+            # Adding input event embedding & event_gen
+            event_gen = rearrange(event_gen, 'L B H W C -> (L B) H W C')
+            assert x.shape == event_gen.shape
+            x += event_gen
+
         for blk in self.att_blocks:
             x = blk(x)
+        # print('x after ViTs:', x.shape)
         x = nhwC_2_nChw(x)  # B' H W C -> B' C H W
+        # print('x after ViTs reshape:', x.shape)
 
         new_h, new_w = x.shape[2], x.shape[3]
 
         x = rearrange(x, "(L B) C H W -> (B H W) L C", L=sequence_length)
+        # print('x ssm input:', x.shape)
 
         if states is None:
             states = self.s5_block.s5.initial_state(
@@ -242,12 +275,16 @@ class RNNDetectorStage(nn.Module):
         else:
             states = rearrange(states, "B C H W -> (B H W) C")
 
+        # print('ssm states input:', states.shape)
         x, states = self.s5_block(x, states)
+        # print('ssm outputs:', x.shape, states.shape)
 
         x = rearrange(
             x, "(B H W) L C -> L B C H W", B=batch_size, H=int(new_h), W=int(new_w)
         )
 
         states = rearrange(states, "(B H W) C -> B C H W", H=new_h, W=new_w)
+        # print('layer output:', x.shape, states.shape)
+        # print('===\n')
 
         return x, states
